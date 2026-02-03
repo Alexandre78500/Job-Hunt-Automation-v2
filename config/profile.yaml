@@ -1,0 +1,117 @@
+candidate:
+  name: "Alexandre"
+  title: "Data Analyst"
+  experience_years: 2
+  availability: "immediate"
+  languages:
+    - name: "Francais"
+      level: "native"
+    - name: "Anglais"
+      level: "professional"
+
+search:
+  job_titles:
+    - "Data Analyst"
+    - "Consultant Data"
+    - "Data Analyst Power BI"
+    - "Business Intelligence Analyst"
+    - "BI Analyst"
+    - "Analyste Donnees"
+  locations:
+    - "Paris"
+    - "Ile-de-France"
+    - "92"
+    - "75"
+    - "Remote"
+    - "Teletravail"
+  contract_types:
+    - "CDI"
+  company_types_preferred:
+    - "ESN"
+    - "Conseil"
+    - "Cabinet de conseil"
+
+skills:
+  required:
+    - keyword: "Power BI"
+      weight: 15
+      aliases: ["PowerBI", "Power-BI"]
+    - keyword: "SQL"
+      weight: 12
+      aliases: ["SQL Server", "PostgreSQL", "MySQL"]
+  important:
+    - keyword: "DAX"
+      weight: 10
+    - keyword: "Power Query"
+      weight: 10
+      aliases: ["M Language"]
+    - keyword: "Python"
+      weight: 8
+    - keyword: "Excel"
+      weight: 5
+      aliases: ["VBA", "Tableaux croises"]
+    - keyword: "Tableau"
+      weight: 6
+      aliases: ["Tableau Software"]
+    - keyword: "Snowflake"
+      weight: 7
+    - keyword: "Azure"
+      weight: 6
+      aliases: ["Azure Data Factory", "Azure Synapse"]
+    - keyword: "Talend"
+      weight: 5
+  nice_to_have:
+    - keyword: "Dashboard"
+      weight: 4
+      aliases: ["Dashboarding", "Tableaux de bord"]
+    - keyword: "KPI"
+      weight: 3
+      aliases: ["Indicateurs"]
+    - keyword: "Reporting"
+      weight: 3
+    - keyword: "Data Quality"
+      weight: 4
+      aliases: ["Qualite des donnees"]
+    - keyword: "ETL"
+      weight: 4
+    - keyword: "Data Warehouse"
+      weight: 4
+      aliases: ["DWH", "Entrepot de donnees"]
+  not_known:
+    - keyword: "DBT"
+      penalty: -10
+    - keyword: "SAS"
+      penalty: -8
+    - keyword: "Dataiku"
+      penalty: -8
+    - keyword: "Google Analytics"
+      penalty: -5
+    - keyword: "Machine Learning"
+      penalty: -5
+      aliases: ["ML", "Deep Learning"]
+    - keyword: "Data Science"
+      penalty: -5
+
+exclusions:
+  titles:
+    - "Senior"
+    - "Lead"
+    - "Manager"
+    - "Directeur"
+    - "Head of"
+  requirements:
+    - "10 ans"
+    - "10+ ans"
+    - "8 ans"
+    - "experience significative"
+  companies: []
+
+bonuses:
+  - keyword: "Junior"
+    bonus: 10
+  - keyword: "Confirme"
+    bonus: 5
+  - keyword: "2 ans"
+    bonus: 5
+  - keyword: "3 ans"
+    bonus: 3

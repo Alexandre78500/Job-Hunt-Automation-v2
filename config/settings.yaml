@@ -1,0 +1,66 @@
+app:
+  name: "Job Hunter Automation"
+  version: "1.0.0"
+  log_level: "INFO"
+
+database:
+  path: "data/jobs.db"
+  cleanup_days: 30
+
+scraping:
+  wttj:
+    enabled: true
+    base_url: "https://www.welcometothejungle.com"
+    search_queries:
+      - "Data Analyst"
+      - "Consultant Data"
+      - "Power BI"
+    location: "Paris, France"
+    contract_type: "CDI"
+    max_pages: 5
+    delay_between_requests: 2
+  linkedin:
+    enabled: true
+    email_label: "LinkedIn Jobs"
+    max_emails_per_run: 50
+
+scoring:
+  keyword_prefilter_threshold: 30
+  ai_scoring_threshold: 70
+  weights:
+    keyword_score: 0.3
+    ai_score: 0.7
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  endpoints:
+    get_pending_jobs: "/api/jobs/pending"
+    submit_scores: "/api/jobs/scores"
+    get_stats: "/api/stats"
+
+notifications:
+  discord:
+    enabled: true
+    webhook_url: "${DISCORD_WEBHOOK_URL}"
+    embed_color: 0x00D166
+    include_fields:
+      - score
+      - company
+      - location
+      - contract
+      - salary
+      - ai_reasoning
+
+openclaw:
+  system_prompt: |
+    You are an assistant specialized in evaluating job offers.
+    Evaluate if the offer matches a Data Analyst with 2 years of experience,
+    strong in Power BI/DAX/SQL, based in Paris, looking for a CDI in ESN/Consulting.
+
+    Reply ONLY in JSON with this format:
+    {
+      "score": <0-100>,
+      "reasoning": "<short explanation in 1-2 sentences>"
+    }
+  timeout_seconds: 30
