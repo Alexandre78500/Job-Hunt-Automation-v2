@@ -1,7 +1,7 @@
 # Job Hunter Automation - Plan de Développement
 
 > Document de référence pour l'implémentation du projet par les agents IA.
-> Dernière mise à jour : 3 février 2026
+> Dernière mise à jour : 4 février 2026
 
 ---
 
@@ -15,7 +15,7 @@ Automatiser la recherche d'emploi quotidienne en :
 
 ### 1.2 Contexte d'exécution
 - **Environnement** : VPS Linux avec OpenClaw (assistant IA open-source)
-- **Déclenchement** : Cron job quotidien à 9h00
+- **Déclenchement** : Cron job quotidien (scraping séquentiel par plateforme)
 - **Intégration** : API REST pour communication avec OpenClaw
 
 ### 1.3 Profil cible
@@ -52,59 +52,60 @@ Automatiser la recherche d'emploi quotidienne en :
 
 ### 2.2 Diagramme de flux
 
+Le pipeline exécute les scrapers séquentiellement, chacun étant indépendant. Un seul cron
+lance tout l'un après l'autre. Le temps d'exécution n'est pas une contrainte.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          CRON (9h00 quotidien)                          │
+│                        CRON QUOTIDIEN (un seul cron)                    │
+│                           main.py (Orchestrateur)                       │
 └─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            main.py (Orchestrateur)                       │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                    ┌───────────────┴───────────────┐
-                    ▼                               ▼
-        ┌───────────────────┐           ┌───────────────────┐
-        │  WTTJ Scraper     │           │  LinkedIn Email   │
-        │  (BeautifulSoup)  │           │  Parser (Gmail)   │
-        └───────────────────┘           └───────────────────┘
-                    │                               │
-                    └───────────────┬───────────────┘
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │     Déduplication (hash)      │
-                    │   + Insertion SQLite (new)    │
-                    └───────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │   Pré-filtre mots-clés        │
-                    │   (scoring algorithmique)     │
-                    │   Élimine les < 30%           │
-                    └───────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │   API REST ← OpenClaw         │
-                    │   (scoring IA des 30-100%)    │
-                    └───────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │   Mise à jour scores SQLite   │
-                    │   Statut: scored              │
-                    └───────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │   Filtre final (≥ 70%)        │
-                    └───────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │   Discord Webhook             │
-                    │   Statut: notified            │
-                    └───────────────────────────────┘
+         │                                    │
+         ▼                                    ▼
+┌──────────────────────┐           ┌──────────────────────────────┐
+│  WTTJ Scraper        │           │  LinkedIn Scraper            │
+│  (API Algolia)       │           │                              │
+│                      │           │  Temps 1: Parser Gmail       │
+│  1. Recherche Algolia│           │    → titres, URLs, entreprise│
+│  2. Parse résultats  │           │                              │
+│  3. Délai: 2s/req    │           │  Temps 2: Fetch fiches       │
+│                      │           │    → GET avec cookie li_at   │
+└──────────┬───────────┘           │    → Parse HTML complet      │
+           │                       │    → Délai: 15s/requête      │
+           │                       └──────────────┬───────────────┘
+           │                                      │
+           ▼                                      ▼
+┌──────────────────────┐           ┌──────────────────────────────┐
+│ SQLite               │           │ SQLite                       │
+│ source="wttj"        │           │ source="linkedin"            │
+└──────────┬───────────┘           └──────────────┬───────────────┘
+           │                                      │
+           └──────────────────┬───────────────────┘
+                              ▼
+              ┌───────────────────────────────┐
+              │     Déduplication (SHA256)     │
+              │   + Pré-filtre mots-clés      │
+              │   (scoring algorithmique)     │
+              │   Élimine les < 30%           │
+              └───────────────────────────────┘
+                              │
+                              ▼
+              ┌───────────────────────────────┐
+              │   API REST ← OpenClaw/Orion   │
+              │   (scoring IA des 30-100%)    │
+              └───────────────────────────────┘
+                              │
+                              ▼
+              ┌───────────────────────────────┐
+              │   Filtre final (≥ 70%)        │
+              └───────────────────────────────┘
+                              │
+                              ▼
+              ┌───────────────────────────────┐
+              │   Discord Webhook             │
+              │   Récapitulatif groupé        │
+              │   par source                  │
+              └───────────────────────────────┘
 ```
 
 ### 2.3 Structure du projet
@@ -205,6 +206,7 @@ CREATE TABLE jobs (
     
     -- Statut et métadonnées
     status TEXT DEFAULT 'new',              -- 'new', 'scored', 'notified', 'applied', 'ignored'
+    detail_status TEXT DEFAULT 'pending',     -- 'pending', 'fetched', 'failed' (pour LinkedIn fetch)
     scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     scored_at TIMESTAMP,
     notified_at TIMESTAMP,
@@ -411,11 +413,19 @@ scraping:
     max_pages: 5  # Pages max par requête
     delay_between_requests: 2  # Secondes
   
-  # LinkedIn (via alertes email)
+  # LinkedIn (via alertes email Gmail + fetch fiches via cookie)
   linkedin:
     enabled: true
-    email_label: "LinkedIn Jobs"  # Label Gmail pour filtrer
+    email_label: "LinkedIn Jobs"       # Label Gmail pour filtrer les alertes
     max_emails_per_run: 50
+    # Fetch des fiches complètes via cookie li_at
+    fetch_details: true                # Activer le fetch des fiches LinkedIn
+    delay_between_requests: 15         # Secondes entre chaque fetch (anti-ban)
+    max_fetches_per_run: 30            # Max fiches à récupérer par exécution
+    user_agents:                       # Rotation de User-Agents réalistes
+      - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Configuration scoring
 scoring:
@@ -486,6 +496,10 @@ GMAIL_TOKEN_PATH=credentials/gmail_token.json
 # OpenClaw API (si nécessaire)
 OPENCLAW_API_URL=http://localhost:3000
 
+# LinkedIn session cookie (récupérer depuis DevTools > Application > Cookies > li_at)
+# Durée de vie : ~12 mois. Orion notifiera sur Discord quand il expire.
+LINKEDIN_LI_AT_COOKIE=AQEDAx...
+
 # Optionnel: Proxy pour scraping
 # HTTP_PROXY=http://proxy:port
 # HTTPS_PROXY=http://proxy:port
@@ -554,17 +568,85 @@ class BaseScraper(ABC):
 
 ### 5.3 Module `scrapers/linkedin_email.py`
 
-**Responsabilités :**
+**Architecture en deux temps :**
+
+Le scraper LinkedIn fonctionne en deux phases séquentielles :
+
+**Temps 1 : Parser les alertes Gmail (rapide, ~10 secondes)**
 - Se connecter à Gmail via OAuth 2.0
-- Récupérer les emails avec le label "LinkedIn Jobs"
-- Parser le contenu HTML des emails d'alerte LinkedIn
-- Extraire : titre, entreprise, localisation, URL de l'offre
+- Récupérer les emails non lus avec le label "LinkedIn Jobs"
+- Parser le HTML des emails pour extraire : titre, entreprise, localisation, URL LinkedIn
 - Marquer les emails comme lus après traitement
 
-**Points d'attention :**
-- Nécessite configuration OAuth initiale (script one-time)
-- Les emails LinkedIn ont un format HTML spécifique à parser
-- Stocker le token de refresh pour les exécutions futures
+**Temps 2 : Fetch des fiches complètes via cookie `li_at` (lent, ~7.5 min pour 30 offres)**
+- Pour chaque URL LinkedIn extraite au Temps 1
+- Effectuer un `requests.get()` avec le cookie `li_at` et des headers réalistes
+- Parser le HTML de la page LinkedIn pour extraire la description complète
+- Respecter un délai de 15 secondes entre chaque requête (configurable)
+- Rotation des User-Agents pour réduire l'empreinte
+
+**Gestion du cookie `li_at` :**
+- Le cookie est stocké dans `.env` sous `LINKEDIN_LI_AT_COOKIE`
+- Durée de vie : ~12 mois
+- Si le cookie est absent ou expiré (réponse 401/403) :
+  - Logger l'erreur
+  - Envoyer une notification Discord à Alexandre : "Cookie LinkedIn expiré, renouvellement nécessaire"
+  - Ne PAS scorer les offres LinkedIn ce jour-là (skip complet)
+  - Les offres restent en base avec `detail_status='failed'` pour retry ultérieur
+
+**Sécurité anti-ban :**
+
+| Paramètre | Valeur | Raison |
+|---|---|---|
+| Délai entre requêtes | 15 secondes | Simule un humain qui lit |
+| Max fetches/jour | 30 | Volume réaliste d'un utilisateur |
+| User-Agent | Navigateur réaliste (rotation) | Pas de signature bot |
+| Headers | Accept-Language: fr-FR | Cohérent avec le profil |
+
+**Code de référence :**
+
+```python
+class LinkedInEmailScraper(BaseScraper):
+
+    def scrape(self) -> List[JobOffer]:
+        # Temps 1 : Parser les emails Gmail → URLs + métadonnées
+        raw_offers = self._parse_gmail_alerts()
+
+        # Temps 2 : Enrichir avec les fiches complètes via cookie
+        if self.li_at_cookie and self.fetch_details_enabled:
+            enriched_offers = self._fetch_job_details(raw_offers)
+        else:
+            enriched_offers = raw_offers
+
+        return enriched_offers
+
+    def _fetch_job_details(self, offers: List[JobOffer]) -> List[JobOffer]:
+        for offer in offers:
+            html = self._fetch_linkedin_page(offer.url)
+            if html:
+                details = self._parse_job_page(html)
+                offer.description = details.get("description", offer.description)
+                offer.contract_type = details.get("contract_type", offer.contract_type)
+                offer.salary_min = details.get("salary_min", offer.salary_min)
+                offer.salary_max = details.get("salary_max", offer.salary_max)
+            time.sleep(self.delay_between_requests)
+        return offers
+
+    def _fetch_linkedin_page(self, url: str) -> Optional[str]:
+        headers = {
+            "User-Agent": random.choice(self.user_agents),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+            "Cookie": f"li_at={self.li_at_cookie}",
+        }
+        response = self.session.get(url, headers=headers, timeout=15, allow_redirects=False)
+        if response.status_code == 200:
+            return response.text
+        if response.status_code in (401, 403):
+            self._notify_cookie_expired()
+            return None
+        return None
+```
 
 ### 5.4 Module `matcher/keyword_matcher.py`
 
@@ -711,28 +793,65 @@ async def trigger_scrape():
 
 ### 5.7 Module `notifier/discord_notifier.py`
 
-**Format du message Discord (embed) :**
+**Format : Embed récapitulatif groupé par source**
+
+Au lieu d'envoyer un embed par offre, le notifier envoie UN récapitulatif quotidien groupé par source.
+
+**Structure du message Discord :**
 
 ```python
-def build_discord_embed(job: Job) -> dict:
-    """Construit l'embed Discord pour une offre."""
-    return {
-        "embeds": [{
-            "title": f"🎯 {job.title}",
-            "url": job.url,
-            "color": 0x00D166,  # Vert
-            "fields": [
-                {"name": "🏢 Entreprise", "value": job.company, "inline": True},
-                {"name": "📍 Localisation", "value": job.location or "Non précisé", "inline": True},
-                {"name": "📄 Contrat", "value": job.contract_type or "Non précisé", "inline": True},
-                {"name": "💰 Salaire", "value": format_salary(job.salary_min, job.salary_max), "inline": True},
-                {"name": "📊 Score", "value": f"**{job.final_score}%**", "inline": True},
-                {"name": "🤖 Analyse IA", "value": job.ai_reasoning[:200] if job.ai_reasoning else "N/A", "inline": False},
-            ],
-            "footer": {"text": f"Source: {job.source.upper()} | {job.scraped_at.strftime('%d/%m/%Y')}"},
-        }]
+def send_daily_recap(self, jobs_by_source: Dict[str, List[Job]]) -> bool:
+    """
+    Envoie un récapitulatif quotidien groupé par source.
+
+    jobs_by_source = {
+        "wttj": [Job, Job, ...],
+        "linkedin": [Job, Job, ...],
     }
+    """
+    embeds = []
+
+    # Embed d'en-tête avec résumé
+    total = sum(len(jobs) for jobs in jobs_by_source.values())
+    summary_parts = [f"{len(jobs)} {source.upper()}" for source, jobs in jobs_by_source.items()]
+    summary = ", ".join(summary_parts)
+
+    embeds.append({
+        "title": f"Job Hunter - Rapport du {date.today().strftime('%d/%m/%Y')}",
+        "description": f"**{total} offres trouvées** ({summary})",
+        "color": 0x00D166,
+    })
+
+    # Un embed par source
+    for source, jobs in jobs_by_source.items():
+        source_label = {"wttj": "Welcome to the Jungle", "linkedin": "LinkedIn"}.get(source, source)
+        lines = []
+        for i, job in enumerate(jobs, 1):
+            score_str = f"**{job.final_score}%**" if job.final_score else "N/A"
+            location_str = f" | {job.location}" if job.location else ""
+            contract_str = f" | {job.contract_type}" if job.contract_type else ""
+            reasoning = f"\n> {job.ai_reasoning[:150]}" if job.ai_reasoning else ""
+            lines.append(
+                f"**{i}. [{job.title}]({job.url})** — {job.company}\n"
+                f"Score: {score_str}{location_str}{contract_str}{reasoning}\n"
+            )
+        embeds.append({
+            "title": f"── {source_label} ({len(jobs)} offres) ──",
+            "description": "\n".join(lines)[:4000],  # Limite Discord
+            "color": 0x5865F2 if source == "linkedin" else 0xFFCD00,
+        })
+
+    # Envoyer (Discord limite à 10 embeds par message)
+    payload = {"embeds": embeds[:10]}
+    return self._send_webhook(payload)
 ```
+
+**Méthode `send_job()` conservée** pour les cas où une seule offre doit être notifiée (ex: via l'API).
+
+**Nouveau flow dans `main.py` :**
+
+Le notifier n'envoie plus les offres une par une. L'orchestrateur collecte toutes les offres
+notifiables après le scoring, les groupe par source, puis appelle `send_daily_recap()`.
 
 ### 5.8 Module `utils/deduplication.py`
 
@@ -797,8 +916,9 @@ def normalize_url(url: str) -> str:
 | 2.1 | Implémenter `BaseScraper` | `src/scrapers/base_scraper.py` | 20 min |
 | 2.2 | Implémenter le scraper WTTJ | `src/scrapers/wttj_scraper.py` | 2h |
 | 2.3 | Script setup OAuth Gmail | `scripts/setup_gmail_oauth.py` | 30 min |
-| 2.4 | Implémenter le parser LinkedIn email | `src/scrapers/linkedin_email.py` | 1h30 |
-| 2.5 | Tests unitaires scrapers | `tests/test_scrapers.py` | 1h |
+| 2.4 | Implémenter le parser LinkedIn email (Temps 1: Gmail) | `src/scrapers/linkedin_email.py` | 1h |
+| 2.5 | Implémenter le fetch LinkedIn via cookie li_at (Temps 2) | `src/scrapers/linkedin_email.py` | 1h30 |
+| 2.6 | Tests unitaires scrapers | `tests/test_scrapers.py` | 1h |
 
 ### Phase 3 : Système de matching (Priorité haute)
 
@@ -813,7 +933,7 @@ def normalize_url(url: str) -> str:
 | # | Tâche | Fichier(s) | Estimation |
 |---|-------|------------|------------|
 | 4.1 | Implémenter l'API FastAPI | `src/api/routes.py` | 1h |
-| 4.2 | Implémenter le notifier Discord | `src/notifier/discord_notifier.py` | 30 min |
+| 4.2 | Implémenter le notifier Discord (récapitulatif groupé par source) | `src/notifier/discord_notifier.py` | 1h |
 | 4.3 | Tests API | `tests/test_api.py` | 30 min |
 
 ### Phase 5 : Orchestration et finalisation (Priorité moyenne)
@@ -886,12 +1006,15 @@ pytest-asyncio>=0.21.0
 - WTTJ : 2 secondes minimum entre chaque requête
 - Gmail API : Respecter les quotas (250 requêtes/utilisateur/seconde)
 - Discord : Max 30 requêtes/minute sur un webhook
+- LinkedIn : 15 secondes minimum entre chaque requête, max 30 fetches/jour
+- Cookie `li_at` : Si réponse 401/403, ne pas retry, notifier sur Discord
 
 ### 8.3 Sécurité
 
 - Ne jamais commiter les credentials (`credentials/` dans `.gitignore`)
 - Variables sensibles uniquement via `.env`
 - Valider toutes les entrées de l'API
+- Cookie LinkedIn `li_at` uniquement via `.env`, ne jamais le logger
 
 ### 8.4 Maintenance
 

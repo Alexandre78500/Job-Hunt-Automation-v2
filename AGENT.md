@@ -237,6 +237,43 @@ Si le message apparaît dans Discord, c'est bon.
 > **DEMANDE À ALEXANDRE** : Confirme-lui que Discord est configuré et montre-lui
 > le message de test. Attends sa validation avant de continuer.
 
+### 4.5 Configurer le cookie LinkedIn `li_at`
+
+**Objectif** : Permettre au script de récupérer les fiches de poste complètes depuis LinkedIn.
+
+Les alertes LinkedIn par email ne contiennent qu'un titre et un lien. Pour accéder à la fiche
+complète (description, compétences requises, salaire...), le script utilise un cookie de session
+LinkedIn (`li_at`). Ce cookie simule une session de navigateur authentifiée.
+
+#### Comment récupérer le cookie
+
+1. Alexandre se connecte à LinkedIn dans son navigateur
+2. Ouvrir les DevTools (F12) > onglet Application > Cookies > `linkedin.com`
+3. Chercher le cookie nommé `li_at`
+4. Copier sa valeur (longue chaîne commençant par `AQED...`)
+5. La coller dans le fichier `.env` :
+
+```bash
+LINKEDIN_LI_AT_COOKIE=AQEDAx...valeur_complete_ici
+```
+
+#### Durée de vie et renouvellement
+
+- Le cookie `li_at` est valide environ **12 mois**
+- Quand il expire, le script reçoit des erreurs 401/403 de LinkedIn
+- Le script détecte automatiquement l'expiration et **t'envoie une notification Discord**
+- Alexandre devra alors refaire la procédure ci-dessus pour obtenir un nouveau cookie
+
+#### Sécurité
+
+- Le cookie ne donne pas accès au mot de passe LinkedIn, seulement à la session
+- Le script respecte un délai de 15 secondes entre chaque requête (configurable)
+- Maximum 30 fiches récupérées par exécution
+- Risque de ban : **très faible** avec ces précautions
+
+> **DEMANDE À ALEXANDRE** : Demande-lui de se connecter à LinkedIn et de te fournir
+> la valeur du cookie `li_at`. Explique-lui la procédure si nécessaire.
+
 ---
 
 ## 5. Lancement et vérification
@@ -523,7 +560,7 @@ Réponse :
 
 ### 8.1 Format des notifications
 
-Quand une offre dépasse le seuil de 70%, le script envoie automatiquement un message Discord avec :
+Après le scoring, le script envoie un **récapitulatif quotidien groupé par source** sur Discord. Chaque source (WTTJ, LinkedIn) a sa propre section dans le message. Les offres avec un score >= 70% sont incluses avec les champs suivants :
 
 | Champ | Description |
 |-------|-------------|
@@ -581,12 +618,24 @@ sudo systemctl restart job-hunter-api
 - Que la base n'est pas corrompue : `python3 -c "from src.database.repository import DatabaseManager; db = DatabaseManager('data/jobs.db'); print(db.get_stats())"`
 - Que le scraper WTTJ fonctionne toujours (les sites changent leur HTML)
 - Que le token Gmail n'a pas expiré
+- Que le cookie LinkedIn `li_at` est toujours valide (vérifier les logs pour des erreurs 401/403)
 
 **Si le scraper WTTJ casse** (0 offres trouvées), c'est probablement parce que WTTJ a modifié son front-end ou ses clés Algolia. Le script réextrait automatiquement les clés à chaque exécution, mais si la structure HTML change, il faudra mettre à jour `src/scrapers/wttj_scraper.py`.
 
 ### 9.5 Alerter Alexandre
 
 Si tu détectes un problème critique (scraping cassé, API down, token expiré), préviens Alexandre sur Discord ou via le canal de communication habituel.
+
+### 9.6 Cookie LinkedIn expiré
+
+Si le cookie `li_at` expire :
+1. Le script détecte l'erreur 401/403 automatiquement
+2. Il envoie une notification Discord : "Cookie LinkedIn expiré"
+3. LinkedIn est temporairement désactivé (les offres ne sont pas perdues, elles restent en base)
+4. Demande à Alexandre de se reconnecter à LinkedIn et de te fournir le nouveau cookie
+5. Met à jour la valeur dans `.env` : `LINKEDIN_LI_AT_COOKIE=nouveau_cookie`
+6. Redémarre le service API : `sudo systemctl restart job-hunter-api`
+7. Les offres en attente seront retentées au prochain cycle de scraping
 
 ---
 
@@ -603,6 +652,9 @@ Si tu détectes un problème critique (scraping cassé, API down, token expiré)
 | `Discord webhook error 404` | Webhook supprimé | Recréer le webhook dans Discord |
 | `sqlite3.OperationalError: database is locked` | Deux processus accèdent à la DB | S'assurer qu'un seul scraping tourne à la fois |
 | `ConnectionError` | Pas d'internet ou site down | Vérifier la connectivité, réessayer plus tard |
+| `LinkedIn 401/403` | Cookie `li_at` expiré | Renouveler le cookie (voir section 4.5) |
+| `LinkedIn rate limited (429)` | Trop de requêtes | Augmenter `delay_between_requests` dans settings.yaml |
+| `LinkedIn fetch: 0 descriptions` | Cookie absent ou invalide | Vérifier `LINKEDIN_LI_AT_COOKIE` dans `.env` |
 
 ### 10.2 Reset complet
 
@@ -673,6 +725,7 @@ Utilise cette checklist pour t'assurer que tout est en place :
 - [ ] Label "LinkedIn Jobs" créé dans Gmail
 - [ ] Alertes LinkedIn configurées vers l'adresse Gmail
 - [ ] Webhook Discord créé et testé
+- [ ] Cookie LinkedIn `li_at` configuré dans `.env`
 - [ ] Premier scraping (`--scrape-only`) réussi
 - [ ] API lancée en arrière-plan (systemd)
 - [ ] Cron quotidien configuré (scraping à 9h)

@@ -50,7 +50,7 @@ Tu te réveilles, tu ouvres Discord, tu as tes offres du jour. Tu postules.
 | Fonctionnalité | Description | Statut |
 |---|---|---|
 | Scraping WTTJ | Recherche via l'API Algolia de Welcome to the Jungle | v1 |
-| Alertes LinkedIn | Parsing des emails d'alerte LinkedIn via Gmail API | v1 |
+| Scraping LinkedIn | Alertes Gmail + fetch fiches complètes via cookie `li_at` | v1 |
 | Pré-filtre mots-clés | Scoring algorithmique sans IA (0 coût) | v1 |
 | Scoring IA | API REST pour scoring par un agent IA externe (OpenClaw) | v1 |
 | Notifications Discord | Envoi des offres pertinentes via webhook | v1 |
@@ -77,8 +77,8 @@ Tu te réveilles, tu ouvres Discord, tu as tes offres du jour. Tu postules.
               ┌───────────────┴───────────────┐
               ▼                               ▼
   ┌─────────────────────┐         ┌─────────────────────┐
-  │   Scraper WTTJ      │         │   Parser Gmail      │
-  │   (API Algolia)     │         │   (Alertes LinkedIn)│
+  │   Scraper WTTJ      │         │   Scraper LinkedIn  │
+  │   (API Algolia)     │         │   (Gmail + cookie)  │
   └─────────────────────┘         └─────────────────────┘
               │                               │
               └───────────────┬───────────────┘
@@ -114,7 +114,7 @@ Tu te réveilles, tu ouvres Discord, tu as tes offres du jour. Tu postules.
                               ▼
               ┌───────────────────────────────┐
               │   Score >= 70% ?              │
-              │   OUI → Discord webhook       │
+              │   OUI → Discord récap/source  │
               │   NON → Archive               │
               └───────────────────────────────┘
 ```
@@ -129,6 +129,11 @@ Le scoring fonctionne en deux étapes pour minimiser les coûts IA :
 | **Scoring fin** | Agent IA via API | Quelques centimes/jour | Évalue finement les offres restantes |
 
 Le pré-filtre utilise un système de poids configurable :
+
+Le scraping LinkedIn utilise un cookie de session (`li_at`) pour récupérer les fiches de poste
+complètes depuis les URLs extraites des alertes email. Sans ce cookie, seuls le titre et
+l'entreprise sont disponibles pour le scoring.
+
 - **Compétences requises** (Power BI, SQL) : poids élevé, éliminatoire si absentes
 - **Compétences importantes** (DAX, Python) : poids moyen
 - **Compétences bonus** (Dashboard, KPI) : poids faible
@@ -202,6 +207,7 @@ python -c "from src.utils.config import load_settings, load_profile; print('Inst
 | `GMAIL_CREDENTIALS_PATH` | Chemin vers le JSON OAuth Gmail | Oui |
 | `GMAIL_TOKEN_PATH` | Chemin vers le token Gmail généré | Oui |
 | `OPENCLAW_API_URL` | URL de l'API OpenClaw | Non |
+| `LINKEDIN_LI_AT_COOKIE` | Cookie de session LinkedIn `li_at` | Oui (pour fiches complètes) |
 
 ### 6.2 Profil candidat (`config/profile.yaml`)
 
@@ -367,6 +373,10 @@ curl -X POST http://localhost:8000/api/jobs/scores \
 ```json
 {"updated": 1}
 ```
+
+### 8.3 Format des notifications Discord
+
+Les notifications sont envoyées sous forme d'un **récapitulatif quotidien groupé par source**. Chaque plateforme (WTTJ, LinkedIn) a sa propre section dans le message Discord, avec les offres triées par score décroissant.
 
 ---
 
