@@ -6,7 +6,7 @@ from typing import Iterator, List, Optional, Tuple
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select, text, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -23,6 +23,13 @@ class DatabaseManager:
 
     def init_db(self) -> None:
         Base.metadata.create_all(self.engine)
+        inspector = inspect(self.engine)
+        if "jobs" in inspector.get_table_names():
+            columns = [col["name"] for col in inspector.get_columns("jobs")]
+            if "detail_status" not in columns:
+                with self.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE jobs ADD COLUMN detail_status TEXT DEFAULT 'pending'"))
+                    conn.commit()
 
     @contextmanager
     def session_scope(self) -> Iterator[Session]:
@@ -38,6 +45,9 @@ class DatabaseManager:
 
     def add_job_offer(self, offer: JobOffer) -> Tuple[Optional[Job], bool]:
         job_hash = generate_job_hash(offer.url, offer.title, offer.company)
+        detail_status = offer.detail_status
+        if not detail_status:
+            detail_status = "fetched" if offer.source != "linkedin" else "pending"
         with self.session_scope() as session:
             job = Job(
                 hash=job_hash,
@@ -51,6 +61,7 @@ class DatabaseManager:
                 salary_min=offer.salary_min,
                 salary_max=offer.salary_max,
                 description=offer.description,
+                detail_status=detail_status,
                 scraped_at=offer.scraped_at,
             )
             session.add(job)
@@ -68,6 +79,24 @@ class DatabaseManager:
             if job:
                 job.keyword_score = score
 
+    def update_job_details(self, job_id: int, offer: JobOffer) -> None:
+        with self.session_scope() as session:
+            job = session.get(Job, job_id)
+            if not job:
+                return
+            if offer.description:
+                job.description = offer.description
+            if offer.contract_type:
+                job.contract_type = offer.contract_type
+            if offer.salary_min is not None:
+                job.salary_min = offer.salary_min
+            if offer.salary_max is not None:
+                job.salary_max = offer.salary_max
+            if offer.location:
+                job.location = offer.location
+            if offer.detail_status:
+                job.detail_status = offer.detail_status
+
     def get_pending_jobs(self, keyword_threshold: float, limit: int = 50) -> List[Job]:
         with self.session_scope() as session:
             stmt = (
@@ -75,7 +104,20 @@ class DatabaseManager:
                 .where(Job.status == "new")
                 .where(Job.keyword_score.is_not(None))
                 .where(Job.keyword_score >= keyword_threshold)
+                .where(or_(Job.source != "linkedin", Job.detail_status == "fetched"))
                 .order_by(Job.keyword_score.desc())
+                .limit(limit)
+            )
+            return list(session.execute(stmt).scalars())
+
+    def get_pending_linkedin_jobs(self, limit: int = 50) -> List[Job]:
+        with self.session_scope() as session:
+            stmt = (
+                select(Job)
+                .where(Job.source == "linkedin")
+                .where(Job.status == "new")
+                .where(Job.detail_status == "pending")
+                .order_by(Job.scraped_at.asc())
                 .limit(limit)
             )
             return list(session.execute(stmt).scalars())

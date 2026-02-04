@@ -18,6 +18,7 @@ class JobOffer:
     salary_min: Optional[int]
     salary_max: Optional[int]
     description: str
+    detail_status: Optional[str] = None
     scraped_at: datetime = field(default_factory=datetime.utcnow)
 
 

@@ -67,9 +67,15 @@ def create_app(settings: dict, profile: dict, repository, notifier, scrape_calla
             [score.model_dump() for score in submission.scores], weights
         )
         threshold = app.state.settings["scoring"]["ai_scoring_threshold"]
-        for job in updated_jobs:
-            if job.final_score is not None and job.final_score >= threshold:
-                if app.state.notifier.send_job(job):
+        jobs_to_notify = [
+            job for job in updated_jobs if job.final_score is not None and job.final_score >= threshold
+        ]
+        if jobs_to_notify:
+            jobs_by_source = {}
+            for job in jobs_to_notify:
+                jobs_by_source.setdefault(job.source, []).append(job)
+            if app.state.notifier.send_daily_recap(jobs_by_source):
+                for job in jobs_to_notify:
                     app.state.repository.mark_notified(job.id)
         return {"updated": len(updated_jobs)}
 

@@ -31,6 +31,7 @@ class Job(Base):
     ai_reasoning = Column(Text)
 
     status = Column(String, default="new")
+    detail_status = Column(String, default="pending")
     scraped_at = Column(DateTime, server_default=func.now())
     scored_at = Column(DateTime)
     notified_at = Column(DateTime)
